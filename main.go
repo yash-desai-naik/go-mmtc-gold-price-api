@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -15,25 +16,31 @@ type GoldData struct {
 }
 
 func main() {
-
 	buyGoldURL := buildURL("com_midas_todays_price_MidasTodaysPricePortlet_INSTANCE_kpwp", "2", "normal", "view", "/serveBuyLivePrice")
 	sellGoldURL := buildURL("com_midas_todays_price_sell_MidasTodaysPriceSellApiPortlet_INSTANCE_kpwp", "2", "normal", "view", "/serveSellLivePrice")
 
-	fmt.Println("Fetching Buying Price...")
-	buyGoldData, _ := fetchData(buyGoldURL)
-	fmt.Println("Fetching Selling Price...")
-	sellGoldData, _ := fetchData(sellGoldURL)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	buyGoldChan := make(chan GoldData)
+	sellGoldChan := make(chan GoldData)
+
+	go fetchData(buyGoldURL, buyGoldChan, &wg)
+	go fetchData(sellGoldURL, sellGoldChan, &wg)
+
+	go func() {
+		wg.Wait()
+		close(buyGoldChan)
+		close(sellGoldChan)
+	}()
+
+	buyGoldData := <-buyGoldChan
+	sellGoldData := <-sellGoldChan
 
 	printHeader()
-	// printResult(buyGoldData, sellGoldData)
-	goldData := GoldData{
-		Gold:        buyGoldData.Gold,
-		GoldTenGram: buyGoldData.GoldTenGram,
-		SellGold:    sellGoldData.SellGold,
-	}
-	formattedRates := formatGoldRates(goldData, goldData)
-	fmt.Println(formattedRates)
 
+	formattedRates := formatGoldRates(buyGoldData, sellGoldData)
+	fmt.Println(formattedRates)
 }
 
 func buildURL(p_p_id, p_p_lifecycle, p_p_state, p_p_mode, p_p_resource_id string) string {
@@ -52,18 +59,21 @@ func buildURL(p_p_id, p_p_lifecycle, p_p_state, p_p_mode, p_p_resource_id string
 	return u.String()
 }
 
-func fetchData(url string) (GoldData, error) {
+func fetchData(url string, ch chan<- GoldData, wg *sync.WaitGroup) {
+	defer wg.Done()
 	resp, err := http.Get(url)
 	if err != nil {
-		return GoldData{}, err
+		fmt.Println("Error fetching data:", err)
+		return
 	}
 	defer resp.Body.Close()
 	var data GoldData
 	err = json.NewDecoder(resp.Body).Decode(&data)
 	if err != nil {
-		return GoldData{}, err
+		fmt.Println("Error decoding JSON:", err)
+		return
 	}
-	return data, nil
+	ch <- data
 }
 
 func printHeader() {
